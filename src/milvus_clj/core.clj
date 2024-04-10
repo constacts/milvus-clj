@@ -11,6 +11,7 @@
             FieldType
             DropDatabaseParam
             DropCollectionParam
+            LoadCollectionParam
             FlushParam]
            [io.milvus.common.clientenum ConsistencyLevelEnum]
            [io.milvus.param.dml InsertParam$Field InsertParam SearchParam]
@@ -194,7 +195,6 @@
                 partition-name (.withPartitionName partition-name)
                 fields' (.withFields (ArrayList. fields'))
                 true .build)]
-    (println param)
     (parse-mutation-result (.insert client param))))
 
 (defn- parse-flush-response [response]
@@ -212,8 +212,22 @@
                 true .build)]
     (parse-flush-response (.flush client param))))
 
-(defn load-collection [^MilvusClient client collection-name]
-  (throw (ex-info "Not implemented" {})))
+(defn load-collection [^MilvusClient client {:keys [collection-name
+                                                    sync-load?
+                                                    sync-load-waiting-interval
+                                                    sync-load-waiting-timeout
+                                                    replica-number
+                                                    refresh?]}]
+
+  (let [param (cond-> (LoadCollectionParam/newBuilder)
+                collection-name (.withCollectionName collection-name)
+                sync-load? (.withSyncLoad sync-load?)
+                sync-load-waiting-interval (.withSyncLoadWaitingInterval sync-load-waiting-interval)
+                sync-load-waiting-timeout (.withSyncLoadWaitingTimeout sync-load-waiting-timeout)
+                replica-number (.withReplicaNumber (int replica-number))
+                refresh? (.withRefresh refresh?)
+                true .build)]
+    (parse-rpc-status (.loadCollection client param))))
 
 ;; Index
 
@@ -276,19 +290,15 @@
                 true .build)]
     (parse-search-results (.search client param))))
 
-
-
-
 (comment
   ;;
-
-  (type (ArrayList. [(float 0.1)]))
-
   (let [db-name "mydb"
         collection-name "mycoll"]
     (with-open [client (milvus-client {:host "localhost" :port 19530 :database db-name})]
-
+      (set-log-level client :debug)
+      (println "--- drop collection")
       (drop-collection client collection-name)
+      (println "--- create collection")
       (create-collection client {:collection-name collection-name
                                  :description "a collection for search"
                                  :field-types [{:primary-key? true
@@ -300,18 +310,21 @@
                                                 :name "embedding"
                                                 :description "embeddings"
                                                 :dimension 3}]})
+      (println "--- load collection")
+      (load-collection client {:collection-name collection-name})
+      (println "--- insert")
       (insert client {:collection-name collection-name
                       :fields [{:name "uid" :values [1 2]}
                                {:name "embedding" :values [(map float [0.1 0.2 0.3])
                                                            (map float [0.4 0.5 0.6])]}]})
-
+      ;; (println "--- flush")
+      ;; (flush-collections client {:collection-names [collection-name]})
+      (println "--- search")
       (search client {:collection-name collection-name
                       :metric-type :l2
                       :vectors (map float [0.1 0.2 0.3])
                       :vector-field-name "embedding"
-                      :top-k 2})
-
-      #_(flush-collections client {:collection-names [collection-name]})))
+                      :top-k 2})))
 
 
 
