@@ -3,11 +3,21 @@
            [io.milvus.param
             ConnectParam
             LogLevel
-            R]
+            R
+            MetricType]
            [io.milvus.param.collection
             CreateDatabaseParam
-            DropDatabaseParam]
-           [java.util.concurrent TimeUnit]))
+            CreateCollectionParam
+            FieldType
+            DropDatabaseParam
+            DropCollectionParam
+            FlushParam]
+           [io.milvus.common.clientenum ConsistencyLevelEnum]
+           [io.milvus.param.dml InsertParam$Field InsertParam SearchParam]
+           [io.milvus.response MutationResultWrapper SearchResultsWrapper]
+           [io.milvus.grpc DataType FlushResponse]
+           [java.util.concurrent TimeUnit]
+           [java.util ArrayList]))
 
 ;; Connections
 
@@ -74,41 +84,197 @@
 
 ;; Database
 
+(defn- parse-rpc-status [response]
+  {:message (-> response
+                parse-r-response
+                bean
+                :msg)})
+
 (defn create-database [^MilvusClient client database-name]
   (let [param (.build (doto (CreateDatabaseParam/newBuilder)
-                        (.withDatabaseName database-name)))
-        {:keys [msg]} (bean (parse-r-response (.createDatabase client param)))]
-    {:message msg}))
+                        (.withDatabaseName database-name)))]
+    (parse-rpc-status (.createDatabase client param))))
 
 (defn drop-database [^MilvusClient client database-name]
   (let [param (.build (doto (DropDatabaseParam/newBuilder)
-                        (.withDatabaseName database-name)))
-        {:keys [msg]} (bean (parse-r-response (.dropDatabase client param)))]
-    {:message msg}))
+                        (.withDatabaseName database-name)))]
+    (parse-rpc-status (.dropDatabase client param))))
 
 (defn list-databases [^MilvusClient client]
   (into [] (.getDbNamesList (parse-r-response (.listDatabases client)))))
 
-
 ;; Collection
 
-(defn create-collection [^MilvusClient client])
+(def data-types
+  {:bool DataType/Bool
+   :int8 DataType/Int8
+   :int16 DataType/Int16
+   :int32 DataType/Int32
+   :int64 DataType/Int64
+   :float DataType/Float
+   :double DataType/Double
+   :var-char DataType/VarChar
+   :binary-vector DataType/BinaryVector
+   :float-vector DataType/FloatVector})
 
-(defn drop-collection [^MilvusClient client])
+(defn- make-field-type [{:keys [name
+                                primary-key?
+                                description
+                                data-type
+                                type-params
+                                dimension
+                                max-length
+                                auto-id?
+                                partition-key?]}]
+  (let [add-type-params (fn [^FieldType field-type type-params]
+                          (doseq [{:keys [key value]} type-params]
+                            (.addTypeParam field-type key value)))]
+    (cond-> (FieldType/newBuilder)
+      name (.withName name)
+      primary-key? (.withPrimaryKey primary-key?)
+      description (.withDescription description)
+      data-type (.withDataType (or (get data-types data-type)
+                                   (throw (ex-info (str "Invalid data type: " name data-type) {}))))
+      type-params (add-type-params type-params)
+      dimension (.withDimension (int dimension))
+      max-length (.withMaxLength (int max-length))
+      auto-id? (.withAutoID auto-id?)
+      partition-key? (.withPartitionKey partition-key?)
+      true .build)))
 
-(defn insert [^MilvusClient client])
+(def ^:private consistency-levels
+  {:strong ConsistencyLevelEnum/STRONG
+   :bounded ConsistencyLevelEnum/BOUNDED
+   :eventually ConsistencyLevelEnum/EVENTUALLY})
+
+(defn create-collection [^MilvusClient client {:keys [collection-name
+                                                      shards-num
+                                                      description
+                                                      field-types
+                                                      consistency-level
+                                                      partition-num]}]
+  (let [field-types' (map make-field-type field-types)
+        param (cond-> (CreateCollectionParam/newBuilder)
+                collection-name (.withCollectionName collection-name)
+                shards-num (.withShardsNum (int shards-num))
+                description (.withDescription description)
+                field-types (.withFieldTypes (ArrayList. field-types'))
+                consistency-level (.withConsistencyLevel
+                                   (or (get consistency-levels consistency-level)
+                                       (throw (ex-info (str "Invalid consistency level: "
+                                                            consistency-level) {}))))
+                partition-num (.withPartitionNum (int partition-num))
+                true .build)]
+    (parse-rpc-status (.createCollection client param))))
+
+(defn drop-collection [^MilvusClient client collection-name]
+  (let [param (.build (doto (DropCollectionParam/newBuilder)
+                        (.withCollectionName collection-name)))]
+    (parse-rpc-status (.dropCollection client param))))
+
+(defn- make-field [{:keys [name values]}]
+  (InsertParam$Field. name (ArrayList. values)))
+
+(defn- parse-mutation-result [response]
+  (let [mutation-result (parse-r-response response)
+        ^MutationResultWrapper mw (MutationResultWrapper. mutation-result)]
+    {:insert-count (try (.getInsertCount mw) (catch Exception _ nil))
+     ;; TODO: 둘 중 하나만 나오니 ids로 통합하자.
+     :long-ids (try (.getLongIDs mw) (catch Exception _ nil))
+     :string-ids (try (.getStringIDs mw) (catch Exception _ nil))
+     :delete-count (try (.getDeleteCount mw) (catch Exception _ nil))
+     :operation-ts (.getOperationTs mw)}))
+
+(defn insert [^MilvusClient client {:keys [collection-name
+                                           partition-name
+                                           fields]}]
+  (let [fields' (map make-field fields)
+        param (cond-> (InsertParam/newBuilder)
+                collection-name (.withCollectionName collection-name)
+                partition-name (.withPartitionName partition-name)
+                fields' (.withFields (ArrayList. fields'))
+                true .build)]
+    (println param)
+    (parse-mutation-result (.insert client param))))
+
+(defn- parse-flush-response [response]
+  (parse-r-response response))
+
+(defn flush-collections [^MilvusClient client {:keys [collection-names
+                                                      sync-flush?
+                                                      sync-flush-waiting-interval-ms
+                                                      sync-flush-waiting-timeout-sec]}]
+  (let [param (cond-> (FlushParam/newBuilder)
+                collection-names (.withCollectionNames (ArrayList. collection-names))
+                sync-flush? (.withSyncFlush sync-flush?)
+                sync-flush-waiting-interval-ms (.withSyncFlushWaitingInterval sync-flush-waiting-interval-ms)
+                sync-flush-waiting-timeout-sec (.withSyncFlushWaitingTimeout sync-flush-waiting-timeout-sec)
+                true .build)]
+    (parse-flush-response (.flush client param))))
+
+(defn load-collection [^MilvusClient client collection-name]
+  (throw (ex-info "Not implemented" {})))
 
 ;; Index
 
-(defn create-index [^MilvusClient client])
+(defn create-index [^MilvusClient client]
+  (throw (ex-info "Not implemented" {})))
 
-(defn drop-index [^MilvusClient client])
+(defn drop-index [^MilvusClient client]
+  (throw (ex-info "Not implemented" {})))
 
 ;; Query And Search
 
-(defn query [])
+(defn query []
+  (throw (ex-info "Not implemented" {})))
 
-(defn search [])
+(defn- parse-search-results [response]
+  (let [search-results (parse-r-response response)
+        ^SearchResultsWrapper search-results-wrapper (SearchResultsWrapper. search-results)]
+    (bean search-results-wrapper)))
+
+(def metric-types
+  {:l2 MetricType/L2
+   :ip MetricType/IP
+   :cosine MetricType/COSINE
+   :hamming MetricType/HAMMING
+   :jaccard MetricType/JACCARD})
+
+(defn search [^MilvusClient client {:keys [collection-name
+                                           consistency-level
+                                           partition-names
+                                           travel-timestamp
+                                           out-fields
+                                           expr
+                                           metric-type
+                                           vector-field-name
+                                           top-k
+                                           vectors
+                                           round-decimal
+                                           params
+                                           ignore-growing?]}]
+  (let [param (cond-> (SearchParam/newBuilder)
+                collection-name (.withCollectionName collection-name)
+                consistency-level (.withConsistencyLevel
+                                   (or (get consistency-levels consistency-level)
+                                       (throw (ex-info (str "Invalid consistency level: "
+                                                            consistency-level) {}))))
+                partition-names (.withPartitionNames (ArrayList. partition-names))
+                travel-timestamp (.withTravelTimestamp travel-timestamp)
+                out-fields (.withOutFields (ArrayList. out-fields))
+                expr (.withExpr expr)
+                metric-type (.withMetricType (or (get metric-types metric-type)
+                                                 (throw (ex-info (str "Invalid metric type: "
+                                                                      metric-type) {}))))
+                vector-field-name (.withVectorFieldName vector-field-name)
+                top-k (.withTopK (int top-k))
+                vectors (.withVectors (doto (ArrayList.)
+                                        (.add (ArrayList. vectors))))
+                round-decimal (.withRoundDecimal (int round-decimal))
+                params (.withParams params)
+                ignore-growing? (.withIgnoreGrowing ignore-growing?)
+                true .build)]
+    (parse-search-results (.search client param))))
 
 
 
@@ -116,8 +282,37 @@
 (comment
   ;;
 
-  (with-open [client (milvus-client {:host "localhost" :port 19530})]
-    (drop-database client "mydb"))
+  (type (ArrayList. [(float 0.1)]))
+
+  (let [db-name "mydb"
+        collection-name "mycoll"]
+    (with-open [client (milvus-client {:host "localhost" :port 19530 :database db-name})]
+
+      (drop-collection client collection-name)
+      (create-collection client {:collection-name collection-name
+                                 :description "a collection for search"
+                                 :field-types [{:primary-key? true
+                                                :auto-id? false
+                                                :data-type :int64
+                                                :name "uid"
+                                                :description "unique id"}
+                                               {:data-type :float-vector
+                                                :name "embedding"
+                                                :description "embeddings"
+                                                :dimension 3}]})
+      (insert client {:collection-name collection-name
+                      :fields [{:name "uid" :values [1 2]}
+                               {:name "embedding" :values [(map float [0.1 0.2 0.3])
+                                                           (map float [0.4 0.5 0.6])]}]})
+
+      (search client {:collection-name collection-name
+                      :metric-type :l2
+                      :vectors (map float [0.1 0.2 0.3])
+                      :vector-field-name "embedding"
+                      :top-k 2})
+
+      #_(flush-collections client {:collection-names [collection-name]})))
+
 
 
   ;;;
