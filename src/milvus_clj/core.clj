@@ -18,7 +18,7 @@
            [io.milvus.param.dml InsertParam$Field InsertParam SearchParam]
            [io.milvus.param.index CreateIndexParam]
            [io.milvus.response MutationResultWrapper SearchResultsWrapper]
-           [io.milvus.grpc DataType FlushResponse]
+           [io.milvus.grpc DataType FlushResponse SearchResults]
            [java.util.concurrent TimeUnit]
            [java.util ArrayList]))
 
@@ -300,11 +300,6 @@
 (defn query []
   (throw (ex-info "Not implemented" {})))
 
-(defn- parse-search-results [response]
-  (let [search-results (parse-r-response response)
-        ^SearchResultsWrapper search-results-wrapper (SearchResultsWrapper. search-results)]
-    (bean search-results-wrapper)))
-
 (defn search [^MilvusClient client {:keys [collection-name
                                            consistency-level
                                            partition-names
@@ -333,13 +328,24 @@
                                                                       metric-type) {}))))
                 vector-field-name (.withVectorFieldName vector-field-name)
                 top-k (.withTopK (int top-k))
-                vectors (.withVectors (doto (ArrayList.)
-                                        (.add (ArrayList. vectors))))
+                vectors (.withVectors (let [vector-list (ArrayList.)]
+                                        (doseq [vector vectors]
+                                          (.add vector-list (ArrayList. vector)))
+                                        vector-list))
                 round-decimal (.withRoundDecimal (int round-decimal))
                 params (.withParams params)
                 ignore-growing? (.withIgnoreGrowing ignore-growing?)
-                true .build)]
-    (parse-search-results (.search client param))))
+                true .build)
+        ^SearchResults search-results (parse-r-response (.search client param))
+        ^SearchResultsWrapper search-results-wrapper (SearchResultsWrapper. (.getResults search-results))]
+    (vec (map-indexed
+          (fn [idx _]
+            (mapv #(let [{:keys [fieldValues longID score strID]} (bean %)]
+                     {:id (or longID strID)
+                      :distance score
+                      :entity fieldValues})
+                  (.getIDScore search-results-wrapper idx)))
+          vectors))))
 
 (comment
   ;;
@@ -347,8 +353,10 @@
         collection-name "mycoll"]
     (with-open [client (milvus-client {:host "localhost" :port 19530 :database db-name})]
       (set-log-level client :debug)
+
       (println "--- drop collection")
       (drop-collection client collection-name)
+
       (println "--- create collection")
       (create-collection client {:collection-name collection-name
                                  :description "a collection for search"
@@ -362,11 +370,15 @@
                                                 :description "embeddings"
                                                 :dimension 3}]})
 
+      (println "--- create index")
       (create-index client {:collection-name collection-name
                             :field-name "embedding"
                             :index-type :flat
                             :index-name "embedding_index"
                             :metric-type :l2})
+
+      (println "--- load collection")
+      (load-collection client {:collection-name collection-name})
 
       (println "--- insert")
       (insert client {:collection-name collection-name
@@ -375,21 +387,23 @@
                                                            (map float [0.4 0.5 0.6])]}]})
       ;; (println "--- flush")
       ;; (flush-collections client {:collection-names [collection-name]})
-      ;; (println "--- load collection")
-      ;; (load-collection client {:collection-name collection-name})
-      ;; (Thread/sleep 3000)
-      ;; (println "--- search")
-      ;; (search client {:collection-name collection-name
-      ;;                 :metric-type :l2
-      ;;                 :vectors (map float [0.1 0.2 0.3])
-      ;;                 :vector-field-name "embedding"
-      ;;                 :top-k 2})
 
-
+      (Thread/sleep 1000)
+      (println "--- search")
+      (search client {:collection-name collection-name
+                      :metric-type :l2
+                      :vectors [(map float [0.3 0.4 0.5])
+                                (map float [0.1 0.2 0.3])]
+                      :vector-field-name "embedding"
+                      :out-fields ["uid" "embedding"]
+                      :top-k 2})
       ;;;
       ))
 
 
 
+
   ;;;
   )
+
+(apply interleave [[1 2] [5]])
