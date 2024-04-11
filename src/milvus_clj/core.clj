@@ -4,7 +4,8 @@
             ConnectParam
             LogLevel
             R
-            MetricType]
+            MetricType
+            IndexType]
            [io.milvus.param.collection
             CreateDatabaseParam
             CreateCollectionParam
@@ -15,6 +16,7 @@
             FlushParam]
            [io.milvus.common.clientenum ConsistencyLevelEnum]
            [io.milvus.param.dml InsertParam$Field InsertParam SearchParam]
+           [io.milvus.param.index CreateIndexParam]
            [io.milvus.response MutationResultWrapper SearchResultsWrapper]
            [io.milvus.grpc DataType FlushResponse]
            [java.util.concurrent TimeUnit]
@@ -227,12 +229,68 @@
                 replica-number (.withReplicaNumber (int replica-number))
                 refresh? (.withRefresh refresh?)
                 true .build)]
-    (parse-rpc-status (.loadCollection client param))))
+    (.loadCollection client param)))
 
 ;; Index
 
-(defn create-index [^MilvusClient client]
-  (throw (ex-info "Not implemented" {})))
+(def metric-types
+  {:l2 MetricType/L2
+   :ip MetricType/IP
+   :cosine MetricType/COSINE
+   :hamming MetricType/HAMMING
+   :jaccard MetricType/JACCARD})
+
+(def index-types
+  {;; Only supported for float vectors
+   :flat IndexType/FLAT
+   :ivf-flat IndexType/IVF_FLAT
+   :ivf-sq8 IndexType/IVF_SQ8
+   :ivf-pq IndexType/IVF_PQ
+   :hnsw IndexType/HNSW
+   :diskann IndexType/DISKANN
+   :autoindex IndexType/AUTOINDEX
+   :scann IndexType/SCANN
+
+   ;; GPU indexes only for float vectors
+   :gpu-ivf-flat IndexType/GPU_IVF_FLAT
+   :gpu-ivf-pq IndexType/GPU_IVF_PQ
+
+   ;; Only supported for binary vectors
+   :bin-flat IndexType/BIN_FLAT
+   :bin-ivf-flat IndexType/BIN_IVF_FLAT
+
+   ;; Only for varchar type field
+   :trie IndexType/TRIE
+
+   ;; Only for scalar type field
+   :stl-sort IndexType/STL_SORT ;; only for numeric type field
+   })
+
+(defn create-index [^MilvusClient client {:keys [collection-name
+                                                 field-name
+                                                 index-type
+                                                 index-name
+                                                 metric-type
+                                                 extra-param
+                                                 sync-mode?
+                                                 sync-load-waiting-interval
+                                                 sync-load-waiting-timeout]}]
+  (let [param (cond-> (CreateIndexParam/newBuilder)
+                collection-name (.withCollectionName collection-name)
+                field-name (.withFieldName field-name)
+                index-type (.withIndexType (or (get index-types index-type)
+                                               (throw (ex-info (str "Invalid index type: "
+                                                                    index-type) {}))))
+                index-name (.withIndexName index-name)
+                metric-type (.withMetricType (or (get metric-types metric-type)
+                                                 (throw (ex-info (str "Invalid metric type: "
+                                                                      metric-type) {}))))
+                extra-param (.withExtraParam extra-param)
+                sync-mode? (.withSyncMode sync-mode?)
+                sync-load-waiting-interval (.withSyncWaitingInterval sync-load-waiting-interval)
+                sync-load-waiting-timeout (.withSyncWaitingTimeout sync-load-waiting-timeout)
+                true .build)]
+    (parse-rpc-status (.createIndex client param))))
 
 (defn drop-index [^MilvusClient client]
   (throw (ex-info "Not implemented" {})))
@@ -246,13 +304,6 @@
   (let [search-results (parse-r-response response)
         ^SearchResultsWrapper search-results-wrapper (SearchResultsWrapper. search-results)]
     (bean search-results-wrapper)))
-
-(def metric-types
-  {:l2 MetricType/L2
-   :ip MetricType/IP
-   :cosine MetricType/COSINE
-   :hamming MetricType/HAMMING
-   :jaccard MetricType/JACCARD})
 
 (defn search [^MilvusClient client {:keys [collection-name
                                            consistency-level
@@ -310,8 +361,13 @@
                                                 :name "embedding"
                                                 :description "embeddings"
                                                 :dimension 3}]})
-      (println "--- load collection")
-      (load-collection client {:collection-name collection-name})
+
+      (create-index client {:collection-name collection-name
+                            :field-name "embedding"
+                            :index-type :flat
+                            :index-name "embedding_index"
+                            :metric-type :l2})
+
       (println "--- insert")
       (insert client {:collection-name collection-name
                       :fields [{:name "uid" :values [1 2]}
@@ -319,12 +375,19 @@
                                                            (map float [0.4 0.5 0.6])]}]})
       ;; (println "--- flush")
       ;; (flush-collections client {:collection-names [collection-name]})
-      (println "--- search")
-      (search client {:collection-name collection-name
-                      :metric-type :l2
-                      :vectors (map float [0.1 0.2 0.3])
-                      :vector-field-name "embedding"
-                      :top-k 2})))
+      ;; (println "--- load collection")
+      ;; (load-collection client {:collection-name collection-name})
+      ;; (Thread/sleep 3000)
+      ;; (println "--- search")
+      ;; (search client {:collection-name collection-name
+      ;;                 :metric-type :l2
+      ;;                 :vectors (map float [0.1 0.2 0.3])
+      ;;                 :vector-field-name "embedding"
+      ;;                 :top-k 2})
+
+
+      ;;;
+      ))
 
 
 
