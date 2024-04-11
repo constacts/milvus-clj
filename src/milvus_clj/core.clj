@@ -18,7 +18,7 @@
            [io.milvus.param.dml InsertParam$Field InsertParam SearchParam]
            [io.milvus.param.index CreateIndexParam]
            [io.milvus.response MutationResultWrapper SearchResultsWrapper]
-           [io.milvus.grpc DataType FlushResponse SearchResults]
+           [io.milvus.grpc DataType SearchResults]
            [java.util.concurrent TimeUnit]
            [java.util ArrayList]))
 
@@ -180,11 +180,11 @@
 
 (defn- parse-mutation-result [response]
   (let [mutation-result (parse-r-response response)
-        ^MutationResultWrapper mw (MutationResultWrapper. mutation-result)]
+        ^MutationResultWrapper mw (MutationResultWrapper. mutation-result)
+        long-ids (try (.getLongIDs mw) (catch Exception _ nil))
+        string-ids (try (.getStringIDs mw) (catch Exception _ nil))]
     {:insert-count (try (.getInsertCount mw) (catch Exception _ nil))
-     ;; TODO: 둘 중 하나만 나오니 ids로 통합하자.
-     :long-ids (try (.getLongIDs mw) (catch Exception _ nil))
-     :string-ids (try (.getStringIDs mw) (catch Exception _ nil))
+     :ids (vec (or long-ids string-ids))
      :delete-count (try (.getDeleteCount mw) (catch Exception _ nil))
      :operation-ts (.getOperationTs mw)}))
 
@@ -348,7 +348,7 @@
           vectors))))
 
 (comment
-  ;;
+
   (let [db-name "mydb"
         collection-name "mycoll"]
     (with-open [client (milvus-client {:host "localhost" :port 19530 :database db-name})]
@@ -381,14 +381,13 @@
       (load-collection client {:collection-name collection-name})
 
       (println "--- insert")
-      (insert client {:collection-name collection-name
-                      :fields [{:name "uid" :values [1 2]}
-                               {:name "embedding" :values [(map float [0.1 0.2 0.3])
-                                                           (map float [0.4 0.5 0.6])]}]})
-      ;; (println "--- flush")
-      ;; (flush-collections client {:collection-names [collection-name]})
+      (println (insert client {:collection-name collection-name
+                               :fields [{:name "uid" :values [1 2]}
+                                        {:name "embedding" :values [(map float [0.1 0.2 0.3])
+                                                                    (map float [0.4 0.5 0.6])]}]}))
 
       (Thread/sleep 1000)
+
       (println "--- search")
       (search client {:collection-name collection-name
                       :metric-type :l2
@@ -397,13 +396,7 @@
                       :vector-field-name "embedding"
                       :out-fields ["uid" "embedding"]
                       :top-k 2})
-      ;;;
+      ;;
       ))
-
-
-
-
-  ;;;
+  ;;
   )
-
-(apply interleave [[1 2] [5]])
