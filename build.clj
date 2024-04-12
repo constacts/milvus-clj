@@ -4,7 +4,7 @@
             [clojure.tools.build.api :as b]
             [deps-deploy.deps-deploy :as dd]))
 
-(def lib 'constacts/milvus-clj)
+(def lib 'com.constacts/milvus-clj)
 (def version "0.1.0-SNAPSHOT")
 #_; alternatively, use MAJOR.MINOR.COMMITS:
   (def version (format "1.0.%s" (b/git-count-revs nil)))
