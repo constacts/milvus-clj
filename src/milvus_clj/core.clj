@@ -15,7 +15,7 @@
             LoadCollectionParam
             FlushParam]
            [io.milvus.common.clientenum ConsistencyLevelEnum]
-           [io.milvus.param.dml InsertParam$Field InsertParam SearchParam]
+           [io.milvus.param.dml InsertParam$Field InsertParam SearchParam DeleteParam]
            [io.milvus.param.index CreateIndexParam]
            [io.milvus.response MutationResultWrapper SearchResultsWrapper]
            [io.milvus.grpc DataType SearchResults]
@@ -198,6 +198,17 @@
                 fields' (.withFields (ArrayList. fields'))
                 true .build)]
     (parse-mutation-result (.insert client param))))
+
+
+(defn delete [^MilvusClient client {:keys [collection-name
+                                           partition-name
+                                           expr]}]
+  (let [param (cond-> (DeleteParam/newBuilder)
+                collection-name (.withCollectionName collection-name)
+                partition-name (.withPartitionName partition-name)
+                expr (.withExpr expr)
+                true .build)]
+    (parse-mutation-result (.delete client param))))
 
 (defn- parse-flush-response [response]
   (parse-r-response response))
@@ -388,6 +399,12 @@
 
       (Thread/sleep 1000)
 
+      (println "--- delete")
+      (println (delete client {:collection-name collection-name
+                               :expr "uid == 1"}))
+
+      (Thread/sleep 1000)
+
       (println "--- search")
       (search client {:collection-name collection-name
                       :metric-type :l2
@@ -398,5 +415,6 @@
                       :top-k 2})
       ;;
       ))
+
   ;;
   )
