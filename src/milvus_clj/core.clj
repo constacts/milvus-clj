@@ -13,12 +13,13 @@
             DropDatabaseParam
             DropCollectionParam
             LoadCollectionParam
+            ReleaseCollectionParam
             FlushParam]
            [io.milvus.common.clientenum ConsistencyLevelEnum]
-           [io.milvus.param.dml InsertParam$Field InsertParam SearchParam DeleteParam]
-           [io.milvus.param.index CreateIndexParam]
-           [io.milvus.response MutationResultWrapper SearchResultsWrapper]
-           [io.milvus.grpc DataType SearchResults]
+           [io.milvus.param.dml InsertParam$Field InsertParam SearchParam DeleteParam QueryParam]
+           [io.milvus.param.index CreateIndexParam DropIndexParam]
+           [io.milvus.response MutationResultWrapper SearchResultsWrapper QueryResultsWrapper]
+           [io.milvus.grpc DataType SearchResults QueryResults]
            [java.util.concurrent TimeUnit]
            [java.util ArrayList]))
 
@@ -269,6 +270,14 @@
                 true .build)]
     (.loadCollection client param)))
 
+
+(defn release-collection
+  "This function releases the specified collection and all data within it from memory."
+  [^MilvusClient client {:keys [collection-name]}]
+  (let [param (.build (doto (ReleaseCollectionParam/newBuilder)
+                        (.withCollectionName collection-name)))]
+    (.releaseCollection client param)))
+
 ;; Index
 
 (def metric-types
@@ -332,13 +341,45 @@
                 true .build)]
     (parse-rpc-status (.createIndex client param))))
 
-(defn drop-index [^MilvusClient client]
-  (throw (ex-info "Not implemented" {})))
+(defn drop-index
+  "This function drops an index and its corresponding index file in the collection."
+  [^MilvusClient client {:keys [collection-name index-name]}]
+  (let [param (cond-> (DropIndexParam/newBuilder)
+                collection-name (.withCollectionName collection-name)
+                index-name (.withIndexName index-name)
+                true .build)]
+    (parse-rpc-status (.dropIndex client param))))
 
 ;; Query And Search
 
-(defn query []
-  (throw (ex-info "Not implemented" {})))
+(defn query
+  "This function queries entity(s) based on scalar field(s) filtered by boolean expression."
+  [^MilvusClient client {:keys [collection-name
+                                consistency-level
+                                partition-names
+                                travel-timestamp
+                                out-fields
+                                expr
+                                offset
+                                limit
+                                ignore-growing?]}]
+  (let [param (cond-> (QueryParam/newBuilder)
+                collection-name (.withCollectionName collection-name)
+                consistency-level (.withConsistencyLevel
+                                   (or (get consistency-levels consistency-level)
+                                       (throw (ex-info (str "Invalid consistency level: "
+                                                            consistency-level) {}))))
+                partition-names (.withPartitionNames (ArrayList. partition-names))
+                travel-timestamp (.withTravelTimestamp travel-timestamp)
+                out-fields (.withOutFields (ArrayList. out-fields))
+                expr (.withExpr expr)
+                offset (.withOffset offset)
+                limit (.withLimit limit)
+                ignore-growing? (.withIgnoreGrowing ignore-growing?)
+                true .build)
+        ^QueryResults query-results (parse-r-response (.query client param))
+        ^QueryResultsWrapper query-results-wrapper (QueryResultsWrapper. query-results)]
+    (mapv #(-> % bean :fieldValues) (.getRowRecords query-results-wrapper))))
 
 (defn search
   "This function conducts an approximate nearest neighbor (ANN) search on a vector field and pairs 
@@ -445,6 +486,18 @@
                       :vector-field-name "embedding"
                       :out-fields ["uid" "embedding"]
                       :top-k 2})
+
+      (println "--- query collection")
+      (query client {:collection-name collection-name
+                     :expr "uid == 2"
+                     :out-fields ["uid" "embedding"]})
+
+      (println "--- release collection")
+      (release-collection client {:collection-name collection-name})
+
+      (println "--- drop index")
+      (drop-index client {:collection-name collection-name
+                          :index-name "embedding_index"})
       ;;
       ))
 
