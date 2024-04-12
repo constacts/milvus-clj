@@ -25,6 +25,7 @@
 ;; Connections
 
 (defn milvus-client
+  "This function creates a Milvus client instance."
   [{:keys [host
            port
            database
@@ -56,10 +57,15 @@
                 true .build)]
     (MilvusServiceClient. ^ConnectParam param)))
 
-(defn timeout [^MilvusClient client timeout-ms]
+(defn timeout
+  "The timeout setting for RPC call."
+  [^MilvusClient client timeout-ms]
   (.withTimeout client timeout-ms TimeUnit/MILLISECONDS))
 
 (defn close
+  "Disconnects from a Milvus server with configurable timeout value. Call this method before 
+   the application terminates. This method throws an InterruptedException exception if it is 
+   interrupted."
   ([^MilvusClient client]
    (close client 10))
   ([^MilvusClient client max-wait-sec]
@@ -93,17 +99,23 @@
                 bean
                 :msg)})
 
-(defn create-database [^MilvusClient client database-name]
+(defn create-database
+  "This function creates a database."
+  [^MilvusClient client database-name]
   (let [param (.build (doto (CreateDatabaseParam/newBuilder)
                         (.withDatabaseName database-name)))]
     (parse-rpc-status (.createDatabase client param))))
 
-(defn drop-database [^MilvusClient client database-name]
+(defn drop-database
+  " This function drops a database. Note that this method drops all data in the database."
+  [^MilvusClient client database-name]
   (let [param (.build (doto (DropDatabaseParam/newBuilder)
                         (.withDatabaseName database-name)))]
     (parse-rpc-status (.dropDatabase client param))))
 
-(defn list-databases [^MilvusClient client]
+(defn list-databases
+  "This function lists all databases in the cluster."
+  [^MilvusClient client]
   (into [] (.getDbNamesList (parse-r-response (.listDatabases client)))))
 
 ;; Collection
@@ -150,12 +162,14 @@
    :bounded ConsistencyLevelEnum/BOUNDED
    :eventually ConsistencyLevelEnum/EVENTUALLY})
 
-(defn create-collection [^MilvusClient client {:keys [collection-name
-                                                      shards-num
-                                                      description
-                                                      field-types
-                                                      consistency-level
-                                                      partition-num]}]
+(defn create-collection
+  "This function creates a collection with a specified schema."
+  [^MilvusClient client {:keys [collection-name
+                                shards-num
+                                description
+                                field-types
+                                consistency-level
+                                partition-num]}]
   (let [field-types' (map make-field-type field-types)
         param (cond-> (CreateCollectionParam/newBuilder)
                 collection-name (.withCollectionName collection-name)
@@ -170,7 +184,9 @@
                 true .build)]
     (parse-rpc-status (.createCollection client param))))
 
-(defn drop-collection [^MilvusClient client collection-name]
+(defn drop-collection
+  "This function drops a specified collection."
+  [^MilvusClient client collection-name]
   (let [param (.build (doto (DropCollectionParam/newBuilder)
                         (.withCollectionName collection-name)))]
     (parse-rpc-status (.dropCollection client param))))
@@ -188,9 +204,11 @@
      :delete-count (try (.getDeleteCount mw) (catch Exception _ nil))
      :operation-ts (.getOperationTs mw)}))
 
-(defn insert [^MilvusClient client {:keys [collection-name
-                                           partition-name
-                                           fields]}]
+(defn insert
+  "This function inserts entities into a specified collection."
+  [^MilvusClient client {:keys [collection-name
+                                partition-name
+                                fields]}]
   (let [fields' (map make-field fields)
         param (cond-> (InsertParam/newBuilder)
                 collection-name (.withCollectionName collection-name)
@@ -200,9 +218,12 @@
     (parse-mutation-result (.insert client param))))
 
 
-(defn delete [^MilvusClient client {:keys [collection-name
-                                           partition-name
-                                           expr]}]
+(defn delete
+  "This function deletes an entity or entities from a collection by filtering the primary key field 
+   with boolean expression."
+  [^MilvusClient client {:keys [collection-name
+                                partition-name
+                                expr]}]
   (let [param (cond-> (DeleteParam/newBuilder)
                 collection-name (.withCollectionName collection-name)
                 partition-name (.withPartitionName partition-name)
@@ -213,10 +234,13 @@
 (defn- parse-flush-response [response]
   (parse-r-response response))
 
-(defn flush-collections [^MilvusClient client {:keys [collection-names
-                                                      sync-flush?
-                                                      sync-flush-waiting-interval-ms
-                                                      sync-flush-waiting-timeout-sec]}]
+(defn flush-collections
+  "This method triggers a flush action in which all growing segments in the specified collection 
+   are marked as sealed and then flushed to storage."
+  [^MilvusClient client {:keys [collection-names
+                                sync-flush?
+                                sync-flush-waiting-interval-ms
+                                sync-flush-waiting-timeout-sec]}]
   (let [param (cond-> (FlushParam/newBuilder)
                 collection-names (.withCollectionNames (ArrayList. collection-names))
                 sync-flush? (.withSyncFlush sync-flush?)
@@ -225,12 +249,15 @@
                 true .build)]
     (parse-flush-response (.flush client param))))
 
-(defn load-collection [^MilvusClient client {:keys [collection-name
-                                                    sync-load?
-                                                    sync-load-waiting-interval
-                                                    sync-load-waiting-timeout
-                                                    replica-number
-                                                    refresh?]}]
+(defn load-collection
+  "This function loads the specified collection and all the data within to memory for search or 
+   query."
+  [^MilvusClient client {:keys [collection-name
+                                sync-load?
+                                sync-load-waiting-interval
+                                sync-load-waiting-timeout
+                                replica-number
+                                refresh?]}]
 
   (let [param (cond-> (LoadCollectionParam/newBuilder)
                 collection-name (.withCollectionName collection-name)
@@ -277,15 +304,17 @@
    :stl-sort IndexType/STL_SORT ;; only for numeric type field
    })
 
-(defn create-index [^MilvusClient client {:keys [collection-name
-                                                 field-name
-                                                 index-type
-                                                 index-name
-                                                 metric-type
-                                                 extra-param
-                                                 sync-mode?
-                                                 sync-load-waiting-interval
-                                                 sync-load-waiting-timeout]}]
+(defn create-index
+  "This function creates an index on a field in a specified collection."
+  [^MilvusClient client {:keys [collection-name
+                                field-name
+                                index-type
+                                index-name
+                                metric-type
+                                extra-param
+                                sync-mode?
+                                sync-load-waiting-interval
+                                sync-load-waiting-timeout]}]
   (let [param (cond-> (CreateIndexParam/newBuilder)
                 collection-name (.withCollectionName collection-name)
                 field-name (.withFieldName field-name)
@@ -311,19 +340,22 @@
 (defn query []
   (throw (ex-info "Not implemented" {})))
 
-(defn search [^MilvusClient client {:keys [collection-name
-                                           consistency-level
-                                           partition-names
-                                           travel-timestamp
-                                           out-fields
-                                           expr
-                                           metric-type
-                                           vector-field-name
-                                           top-k
-                                           vectors
-                                           round-decimal
-                                           params
-                                           ignore-growing?]}]
+(defn search
+  "This function conducts an approximate nearest neighbor (ANN) search on a vector field and pairs 
+   up with boolean expression to conduct filtering on scalar fields before searching."
+  [^MilvusClient client {:keys [collection-name
+                                consistency-level
+                                partition-names
+                                travel-timestamp
+                                out-fields
+                                expr
+                                metric-type
+                                vector-field-name
+                                top-k
+                                vectors
+                                round-decimal
+                                params
+                                ignore-growing?]}]
   (let [param (cond-> (SearchParam/newBuilder)
                 collection-name (.withCollectionName collection-name)
                 consistency-level (.withConsistencyLevel
