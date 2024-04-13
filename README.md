@@ -2,7 +2,7 @@
 
 # milvus-clj
 
-Clojure libraray for [Milvus](https://github.com/milvus-io/milvus).
+Clojure library for [Milvus](https://github.com/milvus-io/milvus).
 
 ## Clojure CLI/deps.edn
 
