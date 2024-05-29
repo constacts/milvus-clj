@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.constacts</groupId>
   <artifactId>milvus-clj</artifactId>
-  <version>0.2.2</version>
+  <version>0.3.0-SNAPSHOT</version>
   <name>milvus-clj</name>
   <description>Clojure library for Milvus</description>
   <url>https://github.com/constacts/milvus-clj</url>
