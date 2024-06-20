@@ -16,7 +16,14 @@
             ReleaseCollectionParam
             FlushParam]
            [io.milvus.common.clientenum ConsistencyLevelEnum]
-           [io.milvus.param.dml InsertParam$Field InsertParam SearchParam DeleteParam QueryParam]
+           [io.milvus.param.dml InsertParam$Field
+            InsertParam
+            SearchParam
+            DeleteParam
+            QueryParam
+            HybridSearchParam
+            AnnSearchParam]
+           [io.milvus.param.dml.ranker RRFRanker WeightedRanker]
            [io.milvus.param.index CreateIndexParam DropIndexParam]
            [io.milvus.response MutationResultWrapper SearchResultsWrapper QueryResultsWrapper]
            [io.milvus.grpc DataType SearchResults QueryResults]
@@ -122,16 +129,23 @@
 ;; Collection
 
 (def data-types
-  {:bool DataType/Bool
+  {:none DataType/None
+   :bool DataType/Bool
    :int8 DataType/Int8
    :int16 DataType/Int16
    :int32 DataType/Int32
    :int64 DataType/Int64
    :float DataType/Float
    :double DataType/Double
+   :string DataType/String
    :var-char DataType/VarChar
+   :array DataType/Array
+   :json DataType/JSON
    :binary-vector DataType/BinaryVector
-   :float-vector DataType/FloatVector})
+   :float-vector DataType/FloatVector
+   :float16-vector DataType/Float16Vector
+   :bfloat16-vector DataType/BFloat16Vector
+   :sparse-float-vector DataType/SparseFloatVector})
 
 (defn- make-field-type [{:keys [name
                                 primary-key?
@@ -288,7 +302,9 @@
    :jaccard MetricType/JACCARD})
 
 (def index-types
-  {;; Only supported for float vectors
+  {:none IndexType/None
+
+   ;; Only supported for float vectors
    :flat IndexType/FLAT
    :ivf-flat IndexType/IVF_FLAT
    :ivf-sq8 IndexType/IVF_SQ8
@@ -301,6 +317,8 @@
    ;; GPU indexes only for float vectors
    :gpu-ivf-flat IndexType/GPU_IVF_FLAT
    :gpu-ivf-pq IndexType/GPU_IVF_PQ
+   :GPU_BRUTE_FORCE IndexType/GPU_BRUTE_FORCE
+   :GPU_CAGRA IndexType/GPU_CAGRA
 
    ;; Only supported for binary vectors
    :bin-flat IndexType/BIN_FLAT
@@ -310,8 +328,11 @@
    :trie IndexType/TRIE
 
    ;; Only for scalar type field
-   :stl-sort IndexType/STL_SORT ;; only for numeric type field
-   })
+   :stl-sort IndexType/STL_SORT
+
+   :inverted IndexType/INVERTED
+   :sparse-inverted-index IndexType/SPARSE_INVERTED_INDEX
+   :sparse-wand IndexType/SPARSE_WAND})
 
 (defn create-index
   "This function creates an index on a field in a specified collection."
@@ -430,3 +451,173 @@
                       :entity fieldValues})
                   (.getIDScore search-results-wrapper idx)))
           vectors))))
+
+(defn- ann-search-param [{:keys [expr
+                                 metric-type
+                                 vector-field-name
+                                 top-k
+                                 params
+                                 float-vectors
+                                 binary-vectors
+                                 float16-vectors
+                                 b-float16-vectors
+                                 sparse-float-vectors]}]
+  (cond-> (AnnSearchParam/newBuilder)
+    expr (.withExpr expr)
+    metric-type (.withMetricType (or (get metric-types metric-type)
+                                     (throw (ex-info (str "Invalid metric type: "
+                                                          metric-type) {}))))
+    vector-field-name (.withVectorFieldName vector-field-name)
+    top-k (.withTopK (int top-k))
+    params (.withParams params)
+    float-vectors (.withFloatVectors float-vectors)
+    binary-vectors (.withBinaryVectors binary-vectors)
+    float16-vectors (.withFloat16Vectors float16-vectors)
+    b-float16-vectors (.withBFloat16Vectors b-float16-vectors)
+    sparse-float-vectors (.withSparseFloatVectors sparse-float-vectors)
+    true .build))
+
+(defn rrf-ranker [{:keys [k]}]
+  (cond-> (RRFRanker/newBuilder)
+    k (.withK k)
+    true .build))
+
+(defn weighted-ranker [{:keys [weights]}]
+  (cond-> (WeightedRanker/newBuilder)
+    weights (.withWeights weights)
+    true .build))
+
+(defn- get-vector-count [search-requests]
+  (let [request (first search-requests)]
+    (count (or (:float-vectors request)
+               (:binary-vectors request)
+               (:float16-vectors request)
+               (:b-float16-vectors request)
+               (:sparse-float-vectors request)))))
+
+(defn hybrid-search
+  "This method conducts an approximate nearest neighbor (ANN) search on multiple vector fields and 
+   returns search results after reranking."
+  [^MilvusClient client {:keys [collection-name
+                                consistency-level
+                                partition-names
+                                out-fields
+                                top-k
+                                round-decimal
+                                search-requests
+                                ranker]}]
+  (let [add-search-requests (fn [builder]
+                              (doseq [search-request search-requests]
+                                (.addSearchRequest builder (ann-search-param search-request)))
+                              builder)
+        with-ranker (fn [builder]
+                      (case (:type ranker)
+                        :rrf (.withRanker builder (rrf-ranker (dissoc ranker :type)))
+                        :weighted (.withRanker builder (weighted-ranker (dissoc ranker :type)))
+                        nil)
+                      builder)
+        param (cond-> (HybridSearchParam/newBuilder)
+                collection-name (.withCollectionName collection-name)
+                consistency-level (.withConsistencyLevel
+                                   (or (get consistency-levels consistency-level)
+                                       (throw (ex-info (str "Invalid consistency level: "
+                                                            consistency-level) {}))))
+                partition-names (.withPartitionNames (ArrayList. partition-names))
+                out-fields (.withOutFields (ArrayList. out-fields))
+                top-k (.withTopK (int top-k))
+                round-decimal (.withRoundDecimal (int round-decimal))
+                true with-ranker
+                true add-search-requests
+                true .build)
+
+        ^SearchResults search-results (parse-r-response (.hybridSearch client param))
+        ^SearchResultsWrapper search-results-wrapper (SearchResultsWrapper. (.getResults search-results))]
+    (vec (map
+          (fn [idx]
+            (mapv #(let [{:keys [fieldValues longID score strID]} (bean %)]
+                     {:id (or longID strID)
+                      :distance score
+                      :entity fieldValues})
+                  (.getIDScore search-results-wrapper idx)))
+          (range (get-vector-count search-requests))))))
+
+
+(comment
+  (import [java.util Random TreeMap])
+
+  (defn gen-sparse []
+    (let [ran (Random.)
+          sparse (TreeMap.)
+          dim (inc (.nextInt ran 10))]
+      (dotimes [i dim]
+        (.put sparse (long (.nextInt ran 1000000)) (.nextFloat ran)))
+      sparse))
+
+  (defn gen-float-vector [dim]
+    (let [ran (Random.)]
+      (vec (repeatedly dim #(float (.nextFloat ran))))))
+
+  (with-open [client (client {:host "localhost"
+                              :port 19530})]
+    (create-collection client
+                       {:collection-name "test"
+                        :field-types (concat [{:primary-key? true
+                                               :auto-id? true
+                                               :data-type :int64
+                                               :name "pk"}
+                                              {:data-type :float-vector
+                                               :name "dense_vector"
+                                               :dimension 10}
+                                              {:data-type :sparse-float-vector
+                                               :name "sparse_vector"}])})
+
+    (create-index client {:collection-name "test"
+                          :field-name "sparse_vector"
+                          :index-type :sparse-inverted-index
+                          :index-name "sparse_vector"
+                          :metric-type :ip
+                          ;; :extra-param "{\"drop_ratio_build\": 0.2}"
+                          })
+
+    (create-index client {:collection-name "test"
+                          :field-name "dense_vector"
+                          :index-type :flat
+                          :index-name "dense_vector"
+                          :metric-type :l2})
+
+    (load-collection client {:collection-name "test"})
+
+    #_(dotimes [i 100]
+        (insert client {:collection-name "test"
+                        :fields [{:name "dense_vector"
+                                  :values [(gen-float-vector 10)]}
+                                 {:name "sparse_vector"
+                                  :values [(gen-sparse)]}]}))
+
+    (search client {:collection-name "test"
+                    :metric-type :l2
+                    :vectors [(gen-float-vector 10)]
+                    :vector-field-name "dense_vector"
+                    :out-fields ["pk" "dense_vector" "sparse_vector"]
+                    :top-k 2})
+
+
+    (hybrid-search client {:collection-name "test"
+                           :search-requests [{:vector-field-name "dense_vector"
+                                              :metric-type :l2
+                                              :float-vectors [(gen-float-vector 10)]
+                                              :top-k 10}
+                                             {:vector-field-name "sparse_vector"
+                                              :metric-type :ip
+                                              :sparse-float-vectors [(gen-sparse)]
+                                              :top-k 10}]
+                           :out-fields ["pk" "dense_vector" "sparse_vector"]
+                           :ranker {:type :weighted
+                                    :weights [0.7 0.3]}
+                           :top-k 5}))
+
+
+
+
+  ;;
+  )

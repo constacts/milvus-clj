@@ -83,6 +83,24 @@ com.constacts/milvus-clj {:mvn/version "0.2.3"}
                        :top-k 2})
 ```
 
+### Hybrid Search
+
+```clojure
+(milvus/hybrid-search client {:collection-name "mycoll"
+                              :search-requests [{:vector-field-name "dense_vector"
+                                                  :metric-type :l2
+                                                  :float-vectors [(gen-float-vector 10)]
+                                                  :top-k 10}
+                                                {:vector-field-name "sparse_vector"
+                                                  :metric-type :ip
+                                                  :sparse-float-vectors [(gen-sparse)]
+                                                  :top-k 10}]
+                              :out-fields ["pk" "dense_vector" "sparse_vector"]
+                              :ranker {:type :weighted
+                                        :weights [0.7 0.3]}
+                              :top-k 5}))
+```
+
 ### Query
 
 ```clojure
