@@ -1,34 +1,39 @@
 (ns milvus-clj.core
-  (:import [io.milvus.client MilvusClient MilvusServiceClient]
+  (:require [clojure.walk :refer [stringify-keys]])
+  (:import [com.alibaba.fastjson JSONObject]
+           [io.milvus.client MilvusClient MilvusServiceClient]
+           [io.milvus.common.clientenum ConsistencyLevelEnum]
+           [io.milvus.grpc DataType QueryResults SearchResults]
            [io.milvus.param
             ConnectParam
+            IndexType
             LogLevel
-            R
             MetricType
-            IndexType]
+            R]
            [io.milvus.param.collection
-            CreateDatabaseParam
             CreateCollectionParam
-            FieldType
-            DropDatabaseParam
+            CreateDatabaseParam
             DropCollectionParam
+            DropDatabaseParam
+            FieldType
+            FlushParam
             LoadCollectionParam
-            ReleaseCollectionParam
-            FlushParam]
-           [io.milvus.common.clientenum ConsistencyLevelEnum]
-           [io.milvus.param.dml InsertParam$Field
-            InsertParam
-            SearchParam
+            ReleaseCollectionParam]
+           [io.milvus.param.dml
+            AnnSearchParam
             DeleteParam
-            QueryParam
             HybridSearchParam
-            AnnSearchParam]
+            InsertParam
+            InsertParam$Field
+            QueryParam
+            SearchParam
+            UpsertParam]
            [io.milvus.param.dml.ranker RRFRanker WeightedRanker]
            [io.milvus.param.index CreateIndexParam DropIndexParam]
-           [io.milvus.response MutationResultWrapper SearchResultsWrapper QueryResultsWrapper]
-           [io.milvus.grpc DataType SearchResults QueryResults]
-           [java.util.concurrent TimeUnit]
-           [java.util ArrayList]))
+           [io.milvus.response MutationResultWrapper QueryResultsWrapper SearchResultsWrapper]
+           [java.util ArrayList]
+           [java.util.concurrent TimeUnit]))
+
 
 ;; Connections
 
@@ -219,19 +224,24 @@
      :delete-count (try (.getDeleteCount mw) (catch Exception _ nil))
      :operation-ts (.getOperationTs mw)}))
 
+(defn- map->json-object [m]
+  (JSONObject. (stringify-keys m)))
+
 (defn insert
   "This function inserts entities into a specified collection."
   [^MilvusClient client {:keys [collection-name
                                 partition-name
-                                fields]}]
-  (let [fields' (map make-field fields)
+                                fields
+                                rows]}]
+  (let [rows' (map map->json-object rows)
+        fields' (map make-field fields)
         param (cond-> (InsertParam/newBuilder)
                 collection-name (.withCollectionName collection-name)
                 partition-name (.withPartitionName partition-name)
                 fields' (.withFields (ArrayList. fields'))
+                rows (.withRows (ArrayList. rows'))
                 true .build)]
     (parse-mutation-result (.insert client param))))
-
 
 (defn delete
   "This function deletes an entity or entities from a collection by filtering the primary key field 
@@ -541,6 +551,22 @@
                   (.getIDScore search-results-wrapper idx)))
           (range (get-vector-count search-requests))))))
 
+(defn upsert
+  "This method inserts new entities into a specified collection, and replaces them if the entities 
+   already exist."
+  [^MilvusClient client {:keys [collection-name
+                                partition-name
+                                fields
+                                rows]}]
+  (let [fields' (map make-field fields)
+        rows' (map map->json-object rows)
+        param (cond-> (UpsertParam/newBuilder)
+                collection-name (.withCollectionName collection-name)
+                partition-name (.withPartitionName partition-name)
+                fields' (.withFields (ArrayList. fields'))
+                rows (.withRows (ArrayList. rows'))
+                true .build)]
+    (parse-mutation-result (.upsert client param))))
 
 (comment
   (import [java.util Random TreeMap])
@@ -562,9 +588,11 @@
     (create-collection client
                        {:collection-name "test"
                         :field-types (concat [{:primary-key? true
-                                               :auto-id? true
                                                :data-type :int64
-                                               :name "pk"}
+                                               :name "id"}
+                                              {:data-type :var-char
+                                               :max-length 256
+                                               :name "text"}
                                               {:data-type :float-vector
                                                :name "dense_vector"
                                                :dimension 10}
@@ -587,18 +615,25 @@
 
     (load-collection client {:collection-name "test"})
 
-    #_(dotimes [i 100]
-        (insert client {:collection-name "test"
-                        :fields [{:name "dense_vector"
-                                  :values [(gen-float-vector 10)]}
-                                 {:name "sparse_vector"
-                                  :values [(gen-sparse)]}]}))
+    (insert client {:collection-name "test"
+                    :rows [{:id 1
+                            :text "hello"
+                            :dense_vector (gen-float-vector 10)
+                            :sparse_vector (gen-sparse)}]})
+
+
+    (upsert client {:collection-name "test"
+                    :rows [{:id 1
+                            :text "hello2"
+                            :dense_vector (gen-float-vector 10)
+                            :sparse_vector (gen-sparse)}]})
+
 
     (search client {:collection-name "test"
                     :metric-type :l2
                     :vectors [(gen-float-vector 10)]
                     :vector-field-name "dense_vector"
-                    :out-fields ["pk" "dense_vector" "sparse_vector"]
+                    :out-fields ["id" "dense_vector" "sparse_vector"]
                     :top-k 2})
 
 
@@ -611,13 +646,10 @@
                                               :metric-type :ip
                                               :sparse-float-vectors [(gen-sparse)]
                                               :top-k 10}]
-                           :out-fields ["pk" "dense_vector" "sparse_vector"]
+                           :out-fields ["id" "dense_vector" "sparse_vector"]
                            :ranker {:type :weighted
                                     :weights [0.7 0.3]}
                            :top-k 5}))
-
-
-
 
   ;;
   )
