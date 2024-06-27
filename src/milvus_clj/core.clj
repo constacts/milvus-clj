@@ -1,6 +1,7 @@
 (ns milvus-clj.core
-  (:require [clojure.walk :refer [stringify-keys]])
+  (:require [clojure.walk :refer [postwalk stringify-keys]])
   (:import [com.alibaba.fastjson JSONObject]
+           [com.google.gson JsonObject]
            [io.milvus.client MilvusClient MilvusServiceClient]
            [io.milvus.common.clientenum ConsistencyLevelEnum]
            [io.milvus.grpc DataType QueryResults SearchResults]
@@ -98,7 +99,9 @@
 
 (defn- parse-r-response [^R response]
   (if-let [exception (.getException response)]
-    (throw (ex-info (.getMessage exception) {:response response}))
+    (do
+      (.printStackTrace exception)
+      (throw (ex-info (.getMessage exception) {:response response})))
     (let [status (.getStatus response)]
       (if (success? status)
         (.getData response)
@@ -211,8 +214,26 @@
                         (.withCollectionName collection-name)))]
     (parse-rpc-status (.dropCollection client param))))
 
-(defn- make-field [{:keys [name values]}]
-  (InsertParam$Field. name (ArrayList. values)))
+(defn- map->json-object [m]
+  (postwalk (fn [x]
+              (if (map? x)
+                (JSONObject. (stringify-keys x))
+                x))
+            m))
+
+(defn map->gson-object [m]
+  (let [json (JsonObject.)]
+    (doseq [[k v] m]
+      (.addProperty json k v))
+    json))
+
+(defn- ->data-type [value]
+  (case (type value)
+    (map? value) (map->gson-object value)
+    value))
+
+(defn- make-field-value [{:keys [name values]}]
+  (InsertParam$Field. name (ArrayList. (map ->data-type values))))
 
 (defn- parse-mutation-result [response]
   (let [mutation-result (parse-r-response response)
@@ -224,9 +245,6 @@
      :delete-count (try (.getDeleteCount mw) (catch Exception _ nil))
      :operation-ts (.getOperationTs mw)}))
 
-(defn- map->json-object [m]
-  (JSONObject. (stringify-keys m)))
-
 (defn insert
   "This function inserts entities into a specified collection."
   [^MilvusClient client {:keys [collection-name
@@ -234,13 +252,14 @@
                                 fields
                                 rows]}]
   (let [rows' (map map->json-object rows)
-        fields' (map make-field fields)
+        fields' (map make-field-value fields)
         param (cond-> (InsertParam/newBuilder)
                 collection-name (.withCollectionName collection-name)
                 partition-name (.withPartitionName partition-name)
-                fields' (.withFields (ArrayList. fields'))
+                fields (.withFields (ArrayList. fields'))
                 rows (.withRows (ArrayList. rows'))
                 true .build)]
+    (println "rows:" rows')
     (parse-mutation-result (.insert client param))))
 
 (defn delete
@@ -558,7 +577,7 @@
                                 partition-name
                                 fields
                                 rows]}]
-  (let [fields' (map make-field fields)
+  (let [fields' (map make-field-value fields)
         rows' (map map->json-object rows)
         param (cond-> (UpsertParam/newBuilder)
                 collection-name (.withCollectionName collection-name)
@@ -593,6 +612,8 @@
                                               {:data-type :var-char
                                                :max-length 256
                                                :name "text"}
+                                              {:data-type :json
+                                               :name "tags"}
                                               {:data-type :float-vector
                                                :name "dense_vector"
                                                :dimension 10}
@@ -618,38 +639,39 @@
     (insert client {:collection-name "test"
                     :rows [{:id 1
                             :text "hello"
+                            :tags {:value ["a" "b" "c"]}
                             :dense_vector (gen-float-vector 10)
                             :sparse_vector (gen-sparse)}]})
 
 
-    (upsert client {:collection-name "test"
-                    :rows [{:id 1
-                            :text "hello2"
-                            :dense_vector (gen-float-vector 10)
-                            :sparse_vector (gen-sparse)}]})
+    #_(upsert client {:collection-name "test"
+                      :rows [{:id 1
+                              :text "hello2"
+                              :dense_vector (gen-float-vector 10)
+                              :sparse_vector (gen-sparse)}]})
 
 
-    (search client {:collection-name "test"
-                    :metric-type :l2
-                    :vectors [(gen-float-vector 10)]
-                    :vector-field-name "dense_vector"
-                    :out-fields ["id" "dense_vector" "sparse_vector"]
-                    :top-k 2})
+    #_(search client {:collection-name "test"
+                      :metric-type :l2
+                      :vectors [(gen-float-vector 10)]
+                      :vector-field-name "dense_vector"
+                      :out-fields ["id" "dense_vector" "sparse_vector"]
+                      :top-k 2})
 
 
-    (hybrid-search client {:collection-name "test"
-                           :search-requests [{:vector-field-name "dense_vector"
-                                              :metric-type :l2
-                                              :float-vectors [(gen-float-vector 10)]
-                                              :top-k 10}
-                                             {:vector-field-name "sparse_vector"
-                                              :metric-type :ip
-                                              :sparse-float-vectors [(gen-sparse)]
-                                              :top-k 10}]
-                           :out-fields ["id" "dense_vector" "sparse_vector"]
-                           :ranker {:type :weighted
-                                    :weights [0.7 0.3]}
-                           :top-k 5}))
+    #_(hybrid-search client {:collection-name "test"
+                             :search-requests [{:vector-field-name "dense_vector"
+                                                :metric-type :l2
+                                                :float-vectors [(gen-float-vector 10)]
+                                                :top-k 10}
+                                               {:vector-field-name "sparse_vector"
+                                                :metric-type :ip
+                                                :sparse-float-vectors [(gen-sparse)]
+                                                :top-k 10}]
+                             :out-fields ["id" "dense_vector" "sparse_vector"]
+                             :ranker {:type :weighted
+                                      :weights [0.7 0.3]}
+                             :top-k 5}))
 
   ;;
   )

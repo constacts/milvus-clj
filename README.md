@@ -61,7 +61,22 @@ com.constacts/milvus-clj {:mvn/version "0.2.5"}
 (milvus/insert client {:collection-name "mycoll"
                        :fields [{:name "uid" :values [1 2]}
                                 {:name "embedding" :values [(map float [0.1 0.2 0.3])
-                                                            (map float [0.4 0.5 0.6])]}]})
+                                                            (map float [0.4 0.5 0.6])]}]}
+
+;; or
+
+(milvus/insert client {:collection-name "mycoll"
+                       :rows [{:uid 1
+                               :embedding (map float [0.1 0.2 0.3])} 
+                              {:uid 2
+                               :embedding (map float [0.4 0.5 0.6])}]})
+
+;; for json type
+
+(milvus/insert client {:collection-name "mycoll"
+                       :rows [{:uid 1
+                               :etc {:filename "README.md"}}]})
+
 ```
 
 ### Delete
