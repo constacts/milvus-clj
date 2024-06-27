@@ -1,7 +1,6 @@
 (ns milvus-clj.core
   (:require [clojure.walk :refer [postwalk stringify-keys]])
   (:import [com.alibaba.fastjson JSONObject]
-           [com.google.gson JsonObject]
            [io.milvus.client MilvusClient MilvusServiceClient]
            [io.milvus.common.clientenum ConsistencyLevelEnum]
            [io.milvus.grpc DataType QueryResults SearchResults]
@@ -221,15 +220,9 @@
                 x))
             m))
 
-(defn map->gson-object [m]
-  (let [json (JsonObject.)]
-    (doseq [[k v] m]
-      (.addProperty json k v))
-    json))
-
 (defn- ->data-type [value]
-  (case (type value)
-    (map? value) (map->gson-object value)
+  (if (map? value)
+    (map->json-object value)
     value))
 
 (defn- make-field-value [{:keys [name values]}]
@@ -259,7 +252,6 @@
                 fields (.withFields (ArrayList. fields'))
                 rows (.withRows (ArrayList. rows'))
                 true .build)]
-    (println "rows:" rows')
     (parse-mutation-result (.insert client param))))
 
 (defn delete
@@ -620,28 +612,35 @@
                                               {:data-type :sparse-float-vector
                                                :name "sparse_vector"}])})
 
-    (create-index client {:collection-name "test"
-                          :field-name "sparse_vector"
-                          :index-type :sparse-inverted-index
-                          :index-name "sparse_vector"
-                          :metric-type :ip
+    #_(create-index client {:collection-name "test"
+                            :field-name "sparse_vector"
+                            :index-type :sparse-inverted-index
+                            :index-name "sparse_vector"
+                            :metric-type :ip
                           ;; :extra-param "{\"drop_ratio_build\": 0.2}"
-                          })
+                            })
 
-    (create-index client {:collection-name "test"
-                          :field-name "dense_vector"
-                          :index-type :flat
-                          :index-name "dense_vector"
-                          :metric-type :l2})
+    #_(create-index client {:collection-name "test"
+                            :field-name "dense_vector"
+                            :index-type :flat
+                            :index-name "dense_vector"
+                            :metric-type :l2})
 
-    (load-collection client {:collection-name "test"})
+    #_(load-collection client {:collection-name "test"})
+
+    #_(insert client {:collection-name "test"
+                      :rows [{:id 1
+                              :text "hello"
+                              :tags {:value ["a" "b" "c"]}
+                              :dense_vector (gen-float-vector 10)
+                              :sparse_vector (gen-sparse)}]})
 
     (insert client {:collection-name "test"
-                    :rows [{:id 1
-                            :text "hello"
-                            :tags {:value ["a" "b" "c"]}
-                            :dense_vector (gen-float-vector 10)
-                            :sparse_vector (gen-sparse)}]})
+                    :fields [{:name "id" :values [2]}
+                             {:name "text" :values ["world"]}
+                             {:name "tags" :values [{:value ["d" "e" "f"]}]}
+                             {:name "dense_vector" :values [(gen-float-vector 10)]}
+                             {:name "sparse_vector" :values [(gen-sparse)]}]})
 
 
     #_(upsert client {:collection-name "test"
@@ -672,6 +671,7 @@
                              :ranker {:type :weighted
                                       :weights [0.7 0.3]}
                              :top-k 5}))
+
 
   ;;
   )
