@@ -162,7 +162,8 @@
                                 dimension
                                 max-length
                                 auto-id?
-                                partition-key?]}]
+                                partition-key?
+                                element-type]}]
   (let [add-type-params (fn [^FieldType field-type type-params]
                           (doseq [{:keys [key value]} type-params]
                             (.addTypeParam field-type key value)))]
@@ -177,6 +178,8 @@
       max-length (.withMaxLength (int max-length))
       auto-id? (.withAutoID auto-id?)
       partition-key? (.withPartitionKey partition-key?)
+      element-type (.withElementType (or (get data-types element-type)
+                                         (throw (ex-info (str "Invalid data type: " name data-type) {}))))
       true .build)))
 
 (def ^:private consistency-levels
@@ -635,12 +638,12 @@
                               :dense_vector (gen-float-vector 10)
                               :sparse_vector (gen-sparse)}]})
 
-    (insert client {:collection-name "test"
-                    :fields [{:name "id" :values [2]}
-                             {:name "text" :values ["world"]}
-                             {:name "tags" :values [{:value ["d" "e" "f"]}]}
-                             {:name "dense_vector" :values [(gen-float-vector 10)]}
-                             {:name "sparse_vector" :values [(gen-sparse)]}]})
+    #_(insert client {:collection-name "test"
+                      :fields [{:name "id" :values [2]}
+                               {:name "text" :values ["world"]}
+                               {:name "tags" :values [{:value ["d" "e" "f"]}]}
+                               {:name "dense_vector" :values [(gen-float-vector 10)]}
+                               {:name "sparse_vector" :values [(gen-sparse)]}]})
 
 
     #_(upsert client {:collection-name "test"
@@ -650,12 +653,13 @@
                               :sparse_vector (gen-sparse)}]})
 
 
-    #_(search client {:collection-name "test"
-                      :metric-type :l2
-                      :vectors [(gen-float-vector 10)]
-                      :vector-field-name "dense_vector"
-                      :out-fields ["id" "dense_vector" "sparse_vector"]
-                      :top-k 2})
+    (search client {:collection-name "test"
+                    :metric-type :l2
+                    :vectors [(gen-float-vector 10)]
+                    :vector-field-name "dense_vector"
+                    :expr "json_contains_all(tags[\"value\"], [\"a\"])"
+                    :out-fields ["id" "dense_vector" "sparse_vector"]
+                    :top-k 2})
 
 
     #_(hybrid-search client {:collection-name "test"
