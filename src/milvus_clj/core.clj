@@ -167,7 +167,8 @@
                                 max-capacity]}]
   (let [add-type-params (fn [^FieldType field-type type-params]
                           (doseq [{:keys [key value]} type-params]
-                            (.addTypeParam field-type key value)))]
+                            (.addTypeParam field-type key value))
+                          field-type)]
     (cond-> (FieldType/newBuilder)
       name (.withName name)
       primary-key? (.withPrimaryKey primary-key?)
