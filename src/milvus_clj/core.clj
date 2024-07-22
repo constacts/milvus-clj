@@ -163,7 +163,8 @@
                                 max-length
                                 auto-id?
                                 partition-key?
-                                element-type]}]
+                                element-type
+                                max-capacity]}]
   (let [add-type-params (fn [^FieldType field-type type-params]
                           (doseq [{:keys [key value]} type-params]
                             (.addTypeParam field-type key value)))]
@@ -180,6 +181,7 @@
       partition-key? (.withPartitionKey partition-key?)
       element-type (.withElementType (or (get data-types element-type)
                                          (throw (ex-info (str "Invalid data type: " name data-type) {}))))
+      max-capacity (.withMaxCapacity (int max-capacity))
       true .build)))
 
 (def ^:private consistency-levels
