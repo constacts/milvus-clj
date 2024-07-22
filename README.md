@@ -7,7 +7,7 @@ Clojure library for [Milvus](https://github.com/milvus-io/milvus).
 ## Clojure CLI/deps.edn
 
 ```
-com.constacts/milvus-clj {:mvn/version "0.2.9"}
+com.constacts/milvus-clj {:mvn/version "0.2.10"}
 ```
 
 ## Usage
