@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file. This change
 ## [Unreleased]
 ### Changed
 - Add a new arity to `make-widget-async` to provide a different widget shape.
+- Replaced FastJSON with Gson to upgrade to latest `milvus-sdk-java` version 2.4.4 (breaking change in 2.4.2) 
 
 ## [0.1.1] - 2024-04-10
 ### Changed
